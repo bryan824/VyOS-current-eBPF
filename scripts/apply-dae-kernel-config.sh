@@ -22,7 +22,7 @@ echo ""
 
 # File paths
 KERNEL_CONFIG="vyos-build/scripts/package-build/linux-kernel/arch/x86/configs/vyos_defconfig"
-DAE_CONFIG="vyos-dae-kernel/configs/kernel-dae.config"
+DAE_CONFIG="VyOS-current-eBPF/configs/kernel-dae.config"
 
 # Verify files exist
 echo "Checking files..."
@@ -31,7 +31,7 @@ if [ ! -f "$KERNEL_CONFIG" ]; then
     echo "Current directory: $(pwd)"
     echo "Expected structure:"
     echo "  ./vyos-build/scripts/package-build/linux-kernel/arch/x86/configs/vyos_defconfig"
-    echo "  ./vyos-dae-kernel/configs/kernel-dae.config"
+    echo "  ./VyOS-current-eBPF/configs/kernel-dae.config"
     exit 1
 fi
 
@@ -59,7 +59,7 @@ cat >> "$KERNEL_CONFIG" << 'HEADER'
 ################################################################################
 # dae eBPF/BTF Support
 ################################################################################
-# Added by: github.com/MaurUppi/vyos-dae-kernel
+# Added by: github.com/MaurUppi/VyOS-current-eBPF
 # Required for: dae transparent proxy
 ################################################################################
 
