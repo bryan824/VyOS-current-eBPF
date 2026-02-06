@@ -94,12 +94,12 @@ jobs:
           KERNEL_VERSION=$(grep -E "^kernel_version" vyos-build/data/defaults.toml | cut -d'"' -f2)
           echo "kernel_version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
           
-          # Calculate dae config hash for cache key
-          DAE_CONFIG_HASH=$(sha256sum VyOS-current-eBPF/configs/kernel-dae.config | cut -c1-8)
-          echo "dae_config_hash=${DAE_CONFIG_HASH}" >> $GITHUB_OUTPUT
+          # Calculate dae/eBPF config hash for cache key
+          EBPF_CONFIG_HASH=$(sha256sum VyOS-current-eBPF/configs/kernel-dae.config | cut -c1-8)
+          echo "ebpf_config_hash=${EBPF_CONFIG_HASH}" >> $GITHUB_OUTPUT
           
           # Cache key for kernel packages
-          KERNEL_CACHE_KEY="kernel-${KERNEL_VERSION}-dae-${DAE_CONFIG_HASH}"
+          KERNEL_CACHE_KEY="kernel-${KERNEL_VERSION}-ebpf-${EBPF_CONFIG_HASH}"
           echo "kernel_cache_key=${KERNEL_CACHE_KEY}" >> $GITHUB_OUTPUT
           
           # Version tag for release
@@ -119,7 +119,7 @@ jobs:
           
           echo "=== Build Configuration ==="
           echo "Kernel Version: ${KERNEL_VERSION}"
-          echo "DAE Config Hash: ${DAE_CONFIG_HASH}"
+          echo "eBPF Config Hash: ${EBPF_CONFIG_HASH}"
           echo "Cache Key: ${KERNEL_CACHE_KEY}"
           echo "Version Tag: ${VERSION_TAG}"
           echo "ISO Name: ${ISO_NAME}"
@@ -194,7 +194,7 @@ jobs:
       # ========================================
       # Build Kernel (skip if cached)
       # ========================================
-      - name: Apply dae kernel configuration
+      - name: Apply dae/eBPF kernel configuration
         if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
         run: ./VyOS-current-eBPF/scripts/apply-dae-kernel-config.sh
 
@@ -260,11 +260,11 @@ jobs:
             --title "Kernel Cache: ${{ steps.setup.outputs.kernel_version }}" \
             --notes "cache-key: ${CACHE_KEY}
 
-          Cached kernel packages for VyOS kernel ${{ steps.setup.outputs.kernel_version }} with dae eBPF support.
+          Cached kernel packages for VyOS kernel ${{ steps.setup.outputs.kernel_version }} with eBPF support.
           
           **Do not delete** - Used by CI to speed up builds.
           
-          Config hash: ${{ steps.setup.outputs.dae_config_hash }}" \
+          Config hash: ${{ steps.setup.outputs.ebpf_config_hash }}" \
             --prerelease \
             vyos-build/packages/linux-*.deb
           
