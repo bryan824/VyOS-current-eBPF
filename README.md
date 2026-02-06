@@ -39,7 +39,7 @@ bash <(curl -s https://raw.githubusercontent.com/MaurUppi/VyOS-current-eBPF/mast
 
 ## Build Status
 
-![Build Status](https://github.com/MaurUppi/VyOS-current-eBPF/actions/workflows/build-vyos.yml/badge.svg)
+![Build Status](https://github.com/MaurUppi/VyOS-current-eBPF/actions/workflows/build-vyos-current-latest-docker.yml/badge.svg)
 
 ## Credits
 
