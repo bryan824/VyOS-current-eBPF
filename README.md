@@ -15,11 +15,11 @@ This build adds the following kernel configurations required by dae:
 
 This repository uses GitHub Actions to automatically build VyOS ISOs on the 1st of each month.
 
-Latest release: [Download here](https://github.com/MaurUppi/vyos-eBPF-kernel/releases/latest)
+Latest release: [Download here](https://github.com/MaurUppi/VyOS-current-eBPF/releases/latest)
 
 ## Quick Start
 
-1. Download the latest ISO from [Releases](https://github.com/MaurUppi/vyos-eBPF-kernel/releases)
+1. Download the latest ISO from [Releases](https://github.com/MaurUppi/VyOS-current-eBPF/releases)
 2. Install VyOS as normal
 3. Verify kernel support:
 ```bash
@@ -34,16 +34,15 @@ Latest release: [Download here](https://github.com/MaurUppi/vyos-eBPF-kernel/rel
 
 Run the included verification script:
 ```bash
-bash <(curl -s https://raw.githubusercontent.com/MaurUppi/vyos-eBPF-kernel/master/scripts/verify-kernel.sh)
+bash <(curl -s https://raw.githubusercontent.com/MaurUppi/VyOS-current-eBPF/master/scripts/verify-kernel.sh)
 ```
 
 ## Build Status
 
-![Build Status](https://github.com/MaurUppi/vyos-eBPF-kernel/actions/workflows/build-vyos.yml/badge.svg)
+![Build Status](https://github.com/MaurUppi/VyOS-current-eBPF/actions/workflows/build-vyos.yml/badge.svg)
 
 ## Credits
 
-- Based on [dd010101/vyos-jenkins](https://github.com/dd010101/vyos-jenkins)
 - Kernel configs for [daeuniverse/dae](https://github.com/daeuniverse/dae)
 
 ## License
