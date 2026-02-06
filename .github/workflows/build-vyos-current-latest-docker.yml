@@ -140,17 +140,20 @@ jobs:
           echo "Looking for release: ${RELEASE_TAG}"
           
           # Check if release exists with matching kernel packages
-          RELEASE_INFO=$(gh release view "${RELEASE_TAG}" --json assets 2>/dev/null || echo "")
-          
+          RELEASE_INFO=$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json assets 2>/dev/null || echo "")
+                    
           if [ -n "$RELEASE_INFO" ]; then
             # Check if the cache key matches (stored in release body or asset name)
-            CACHED_KEY=$(gh release view "${RELEASE_TAG}" --json body -q '.body' 2>/dev/null | grep -oP 'cache-key: \K[^\s]+' || echo "")
-            
+            CACHED_KEY=$(
+              gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json body -q '.body' 2>/dev/null \
+              | grep -oP 'cache-key: \K[^\s]+' || echo ""
+            )
+          
             if [ "$CACHED_KEY" = "$CACHE_KEY" ]; then
               echo "✓ Cache hit! Downloading kernel packages..."
-              gh release download "${RELEASE_TAG}" -p "*.deb" -D vyos-build/packages/
+              gh release download "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" -p "*.deb" -D vyos-build/packages/
               echo "cache_hit=true" >> $GITHUB_OUTPUT
-              
+          
               echo "Downloaded packages:"
               ls -lh vyos-build/packages/*.deb
             else
@@ -257,12 +260,13 @@ jobs:
           
           # Create new cache release
           gh release create "${RELEASE_TAG}" \
-            --title "Kernel Cache: ${{ steps.setup.outputs.kernel_version }}" \
-            --notes "cache-key: ${CACHE_KEY}
-
-          Cached kernel packages for VyOS kernel ${{ steps.setup.outputs.kernel_version }} with eBPF support.
-          
-          **Do not delete** - Used by CI to speed up builds.
+          --repo "${GITHUB_REPOSITORY}" \
+          --title "Kernel Cache: ${{ steps.setup.outputs.kernel_version }}" \
+          --notes "cache-key: ${CACHE_KEY}
+            
+            Cached kernel packages for VyOS kernel ${{ steps.setup.outputs.kernel_version }} with eBPF support.
+            
+            **Do not delete** - Used by CI to speed up builds.
           
           Config hash: ${{ steps.setup.outputs.ebpf_config_hash }}" \
             --prerelease \
