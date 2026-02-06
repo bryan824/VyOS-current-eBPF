@@ -1,0 +1,374 @@
+# ============================================================================
+# VyOS with eBPF Kernel from current:latest - Docker Build
+# ============================================================================
+# Repository: github.com/MaurUppi/vyos-dae-kernel
+# Purpose: Build VyOS ISO with custom kernel supporting dae (eBPF proxy)
+#
+# Features:
+#   - Kernel package caching via GitHub Releases
+#   - Skip kernel build if cached version matches
+#   - ISO renamed to match release version
+# ============================================================================
+name: "Build VyOS from latest with eBPF Kernel"
+
+on:
+  schedule:
+    - cron: '0 0 1 * *'  # Monthly on 1st
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run - build kernel only, skip ISO'
+        required: false
+        default: false
+        type: boolean
+      force_kernel_rebuild:
+        description: 'Force kernel rebuild (ignore cache)'
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: vyos-kernel-rebuild
+  cancel-in-progress: false
+
+env:
+  VYOS_BRANCH: current
+  BUILD_BY: "github-actions@MaurUppi"
+  DOCKER_IMAGE: "vyos/vyos-build:current"
+
+jobs:
+  build:
+    name: Build VyOS with Custom Kernel
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+
+    steps:
+      # ========================================
+      # Checkout
+      # ========================================
+      - name: Checkout dae kernel configuration
+        uses: actions/checkout@v4
+        with:
+          path: vyos-dae-kernel
+
+      - name: Checkout VyOS build system
+        uses: actions/checkout@v4
+        with:
+          repository: vyos/vyos-build
+          ref: ${{ env.VYOS_BRANCH }}
+          path: vyos-build
+
+      # ========================================
+      # Setup & Version Detection
+      # ========================================
+      - name: Setup environment
+        id: setup
+        run: |
+          BUILD_DATE=$(date +%Y%m%d)
+          
+          # Read kernel version from VyOS defaults
+          KERNEL_VERSION=$(grep -E "^kernel_version" vyos-build/data/defaults.toml | cut -d'"' -f2)
+          echo "kernel_version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
+          
+          # Calculate dae config hash for cache key
+          DAE_CONFIG_HASH=$(sha256sum vyos-dae-kernel/configs/kernel-dae.config | cut -c1-8)
+          echo "dae_config_hash=${DAE_CONFIG_HASH}" >> $GITHUB_OUTPUT
+          
+          # Cache key for kernel packages
+          KERNEL_CACHE_KEY="kernel-${KERNEL_VERSION}-dae-${DAE_CONFIG_HASH}"
+          echo "kernel_cache_key=${KERNEL_CACHE_KEY}" >> $GITHUB_OUTPUT
+          
+          # Version tag for release
+          VERSION_TAG="v1.5-current-${BUILD_DATE}-eBPF"
+          echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          
+          # ISO filename
+          ISO_NAME="VyOS-${VERSION_TAG}-amd64.iso"
+          echo "iso_name=${ISO_NAME}" >> $GITHUB_OUTPUT
+          
+          # Make scripts executable
+          chmod +x vyos-dae-kernel/scripts/*.sh
+          
+          # Create build directory
+          mkdir -p vyos-build/build vyos-build/packages
+          
+          echo "=== Build Configuration ==="
+          echo "Kernel Version: ${KERNEL_VERSION}"
+          echo "DAE Config Hash: ${DAE_CONFIG_HASH}"
+          echo "Cache Key: ${KERNEL_CACHE_KEY}"
+          echo "Version Tag: ${VERSION_TAG}"
+          echo "ISO Name: ${ISO_NAME}"
+
+      # ========================================
+      # Check Kernel Cache
+      # ========================================
+      - name: Check kernel cache
+        id: cache
+        if: ${{ github.event.inputs.force_kernel_rebuild != 'true' }}
+        run: |
+          CACHE_KEY="${{ steps.setup.outputs.kernel_cache_key }}"
+          
+          # Try to find cached kernel packages in releases
+          RELEASE_TAG="kernel-cache-${{ steps.setup.outputs.kernel_version }}"
+          
+          echo "Checking for cached kernel packages..."
+          echo "Looking for release: ${RELEASE_TAG}"
+          
+          # Check if release exists with matching kernel packages
+          RELEASE_INFO=$(gh release view "${RELEASE_TAG}" --json assets 2>/dev/null || echo "")
+          
+          if [ -n "$RELEASE_INFO" ]; then
+            # Check if the cache key matches (stored in release body or asset name)
+            CACHED_KEY=$(gh release view "${RELEASE_TAG}" --json body -q '.body' 2>/dev/null | grep -oP 'cache-key: \K[^\s]+' || echo "")
+            
+            if [ "$CACHED_KEY" = "$CACHE_KEY" ]; then
+              echo "✓ Cache hit! Downloading kernel packages..."
+              gh release download "${RELEASE_TAG}" -p "*.deb" -D vyos-build/packages/
+              echo "cache_hit=true" >> $GITHUB_OUTPUT
+              
+              echo "Downloaded packages:"
+              ls -lh vyos-build/packages/*.deb
+            else
+              echo "Cache key mismatch (cached: ${CACHED_KEY}, current: ${CACHE_KEY})"
+              echo "cache_hit=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "No cached release found"
+            echo "cache_hit=false" >> $GITHUB_OUTPUT
+          fi
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================
+      # Docker
+      # ========================================
+      - name: Cache Docker image
+        uses: actions/cache@v4
+        with:
+          path: /tmp/docker-cache
+          key: ${{ runner.os }}-docker-vyos-build-current
+          restore-keys: |
+            ${{ runner.os }}-docker-
+
+      - name: Pull VyOS Docker image
+        run: |
+          if [ -f /tmp/docker-cache/vyos-build-current.tar ]; then
+            docker load -i /tmp/docker-cache/vyos-build-current.tar || true
+          fi
+          docker pull ${{ env.DOCKER_IMAGE }}
+          mkdir -p /tmp/docker-cache
+          docker save ${{ env.DOCKER_IMAGE }} -o /tmp/docker-cache/vyos-build-current.tar
+
+      # ========================================
+      # Build Kernel (skip if cached)
+      # ========================================
+      - name: Apply dae kernel configuration
+        if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
+        run: ./vyos-dae-kernel/scripts/apply-dae-kernel-config.sh
+
+      - name: Build custom kernel
+        if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
+        run: |
+          echo "=== Building Custom Kernel ==="
+          docker run --rm --privileged \
+            -v "$(pwd)/vyos-build":/vyos \
+            -w /vyos/scripts/package-build/linux-kernel \
+            -e GOSU_UID=$(id -u) \
+            -e GOSU_GID=$(id -g) \
+            ${{ env.DOCKER_IMAGE }} \
+            bash -c './build.py --packages linux-kernel 2>&1' | tee vyos-build/build/kernel-build.log
+        timeout-minutes: 120
+
+      - name: Copy kernel packages
+        if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
+        run: ./vyos-dae-kernel/scripts/copy-kernel-packages.sh
+
+      # ========================================
+      # Upload Kernel Cache
+      # ========================================
+      - name: Upload kernel cache to release
+        if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
+        run: |
+          RELEASE_TAG="kernel-cache-${{ steps.setup.outputs.kernel_version }}"
+          CACHE_KEY="${{ steps.setup.outputs.kernel_cache_key }}"
+          
+          # Delete existing cache release if exists
+          gh release delete "${RELEASE_TAG}" --yes 2>/dev/null || true
+          git push origin --delete "${RELEASE_TAG}" 2>/dev/null || true
+          
+          # Create new cache release
+          gh release create "${RELEASE_TAG}" \
+            --title "Kernel Cache: ${{ steps.setup.outputs.kernel_version }}" \
+            --notes "cache-key: ${CACHE_KEY}
+
+          Cached kernel packages for VyOS kernel ${{ steps.setup.outputs.kernel_version }} with dae eBPF support.
+          
+          **Do not delete** - Used by CI to speed up builds.
+          
+          Config hash: ${{ steps.setup.outputs.dae_config_hash }}" \
+            --prerelease \
+            vyos-build/packages/linux-*.deb
+          
+          echo "✓ Kernel packages cached to release: ${RELEASE_TAG}"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================
+      # Build ISO (skip if dry_run)
+      # ========================================
+      - name: Build VyOS ISO
+        id: iso
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        run: |
+          echo "=== Building VyOS ISO ==="
+          echo "Kernel packages to include:"
+          ls -lh vyos-build/packages/*.deb 2>/dev/null || echo "  (none found - will use default)"
+          
+          docker run --rm --privileged \
+            -v "$(pwd)/vyos-build":/vyos \
+            -w /vyos \
+            -e GOSU_UID=$(id -u) \
+            -e GOSU_GID=$(id -g) \
+            ${{ env.DOCKER_IMAGE }} \
+            bash -c '
+              sudo make clean
+              sudo ./build-vyos-image \
+                --architecture amd64 \
+                --build-by "${{ env.BUILD_BY }}" \
+                --build-type release \
+                --version "${{ steps.setup.outputs.version_tag }}" \
+                --custom-package python3-systemd \
+                generic
+            ' 2>&1 | tee vyos-build/build/iso-build.log
+
+          # Find and rename ISO
+          ORIG_ISO=$(find vyos-build/build -maxdepth 2 -name "*.iso" -type f 2>/dev/null | head -1)
+          if [ -z "$ORIG_ISO" ]; then
+            echo "::error::No ISO generated"
+            exit 1
+          fi
+          
+          # Rename ISO to match version
+          ISO_DIR=$(dirname "$ORIG_ISO")
+          NEW_ISO="${ISO_DIR}/${{ steps.setup.outputs.iso_name }}"
+          mv "$ORIG_ISO" "$NEW_ISO"
+          
+          echo "iso_file=${NEW_ISO}" >> $GITHUB_OUTPUT
+          echo "iso_sha256=$(sha256sum "$NEW_ISO" | cut -d' ' -f1)" >> $GITHUB_OUTPUT
+          
+          echo "✓ ISO created: ${{ steps.setup.outputs.iso_name }}"
+        timeout-minutes: 120
+
+      # ========================================
+      # Verify ISO (skip if dry_run)
+      # ========================================
+      - name: Install verification tools
+        if: ${{ github.event.inputs.dry_run != 'true' && steps.iso.outputs.iso_file != '' }}
+        run: sudo apt-get update -qq && sudo apt-get install -y squashfs-tools jq
+
+      - name: Verify ISO kernel configuration
+        id: verify
+        if: ${{ github.event.inputs.dry_run != 'true' && steps.iso.outputs.iso_file != '' }}
+        run: |
+          ./vyos-dae-kernel/scripts/verify-iso-kernel.sh "${{ steps.iso.outputs.iso_file }}" | tee vyos-build/build/verification.log
+          if [ -f /tmp/verification-report.json ]; then
+            cp /tmp/verification-report.json vyos-build/build/
+            echo "status=$(jq -r '.overall_status' /tmp/verification-report.json)" >> $GITHUB_OUTPUT
+          fi
+
+      # ========================================
+      # Upload Artifacts (always)
+      # ========================================
+      - name: Upload build logs
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: build-logs-${{ steps.setup.outputs.build_date }}
+          path: |
+            vyos-build/build/*.log
+            vyos-build/build/verification-report.json
+          retention-days: 30
+          if-no-files-found: warn
+
+      - name: Upload kernel packages
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: kernel-packages-${{ steps.setup.outputs.build_date }}
+          path: vyos-build/packages/linux-*.deb
+          retention-days: 7
+          if-no-files-found: warn
+
+      # ========================================
+      # Create Release (skip if dry_run)
+      # ========================================
+      - name: Create checksums
+        if: ${{ github.event.inputs.dry_run != 'true' && steps.verify.outputs.status == 'PASS' }}
+        run: |
+          cd vyos-build/build
+          sha256sum "${{ steps.setup.outputs.iso_name }}" > SHA256SUMS
+
+      - name: Create GitHub release
+        if: ${{ github.event.inputs.dry_run != 'true' && steps.verify.outputs.status == 'PASS' }}
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.setup.outputs.version_tag }}
+          name: "VyOS ${{ steps.setup.outputs.version_tag }}"
+          body: |
+            ## VyOS with eBPF Kernel Support
+            
+            ### Build Information
+            - **Date**: ${{ steps.setup.outputs.build_date }}
+            - **Kernel**: ${{ steps.setup.outputs.kernel_version }}-vyos (Custom eBPF/BTF enabled)
+            - **Base**: VyOS rolling release (current branch)
+            
+            ### Features
+            - ✅ Full BTF (BPF Type Format) support
+            - ✅ Kprobes enabled
+            - ✅ BPF Events support
+            - ✅ Compatible with [dae](https://github.com/daeuniverse/dae) transparent proxy
+            
+            ### Checksums
+            ```
+            SHA256: ${{ steps.iso.outputs.iso_sha256 }}
+            ```
+            
+            ### Verification
+            All required kernel configurations verified: **PASS**
+          files: |
+            ${{ steps.iso.outputs.iso_file }}
+            vyos-build/build/SHA256SUMS
+            vyos-build/build/verification-report.json
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # ========================================
+      # Summary
+      # ========================================
+      - name: Build summary
+        if: always()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Item | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Kernel Version | ${{ steps.setup.outputs.kernel_version }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cache Key | ${{ steps.setup.outputs.kernel_cache_key }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cache Hit | ${{ steps.cache.outputs.cache_hit || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Version Tag | ${{ steps.setup.outputs.version_tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| ISO Name | ${{ steps.setup.outputs.iso_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dry Run | ${{ github.event.inputs.dry_run || 'false' }} |" >> $GITHUB_STEP_SUMMARY
+
+      # ========================================
+      # Cleanup
+      # ========================================
+      - name: Cleanup
+        if: always()
+        run: |
+          sudo rm -rf vyos-build/build/*.iso 2>/dev/null || true
+          sudo rm -rf /tmp/vyos-* 2>/dev/null || true

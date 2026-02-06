@@ -1,0 +1,28 @@
+# Build artifacts
+*.iso
+*.qcow2
+*.img
+*.tar.gz
+*.deb
+
+# Build cache
+build/
+.cache/
+*.log
+
+# Temporary files
+*.tmp
+*.bak
+*~
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS specific
+.DS_Store
+Thumbs.db
+
+# Keep the structure but ignore contents (if needed)
+# configs/*.example

@@ -1,0 +1,414 @@
+# ============================================================================
+# VyOS with eBPF Support - DIAGNOSTIC VERSION
+# ============================================================================
+# This version includes extensive logging to diagnose config injection issues
+# ============================================================================
+
+name: Build VyOS with eBPF (DIAGNOSTIC)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  VYOS_BRANCH: current
+  BUILD_BY: github-actions@MaurUppi
+  DOCKER_IMAGE: vyos/vyos-build:current
+
+jobs:
+  build:
+    name: Build VyOS ISO (Diagnostic)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 360
+    
+    steps:
+      - name: Checkout dae kernel configuration
+        uses: actions/checkout@v4
+        with:
+          path: vyos-dae-kernel
+      
+      - name: Checkout VyOS build system
+        uses: actions/checkout@v4
+        with:
+          repository: vyos/vyos-build
+          ref: ${{ env.VYOS_BRANCH }}
+          path: vyos-build
+      
+      - name: Setup environment
+        id: setup
+        run: |
+          BUILD_DATE=$(date +%Y%m%d)
+          VERSION_TAG="v1.5-current-${BUILD_DATE}-dae-diag"
+          
+          echo "build_date=${BUILD_DATE}" >> $GITHUB_OUTPUT
+          echo "version_tag=${VERSION_TAG}" >> $GITHUB_OUTPUT
+          
+          echo "Version: ${VERSION_TAG}"
+      
+      - name: Pull VyOS Docker image
+        run: |
+          docker pull ${{ env.DOCKER_IMAGE }}
+          docker images ${{ env.DOCKER_IMAGE }}
+      
+      # ========================================
+      # DIAGNOSTIC: Show directory structure
+      # ========================================
+      - name: Show directory structure
+        run: |
+          echo "============================================"
+          echo "  Directory Structure Analysis"
+          echo "============================================"
+          echo ""
+          
+          echo "Current directory:"
+          pwd
+          echo ""
+          
+          echo "vyos-build structure:"
+          ls -la vyos-build/
+          echo ""
+          
+          echo "Looking for vyos_defconfig:"
+          find vyos-build -name "vyos_defconfig" -type f
+          echo ""
+          
+          echo "vyos-dae-kernel structure:"
+          ls -la vyos-dae-kernel/
+          echo ""
+          
+          echo "Looking for kernel-dae.config:"
+          find vyos-dae-kernel -name "kernel-dae.config" -type f
+          echo ""
+      
+      # ========================================
+      # DIAGNOSTIC: Test config injection outside Docker
+      # ========================================
+      - name: Test config injection (host)
+        run: |
+          cd vyos-build
+          
+          KERNEL_CONFIG="scripts/package-build/linux-kernel/arch/x86/configs/vyos_defconfig"
+          DAE_CONFIG="../vyos-dae-kernel/configs/kernel-dae.config"
+          
+          echo "============================================"
+          echo "  Testing Config Injection on Host"
+          echo "============================================"
+          echo ""
+          
+          echo "Kernel config path: $KERNEL_CONFIG"
+          echo "dae config path: $DAE_CONFIG"
+          echo ""
+          
+          if [ -f "$KERNEL_CONFIG" ]; then
+            echo "✓ Kernel config found"
+            echo "  Size: $(wc -l < "$KERNEL_CONFIG") lines"
+            echo "  Last 5 lines:"
+            tail -5 "$KERNEL_CONFIG"
+          else
+            echo "✗ Kernel config NOT found"
+            echo "Searching for any defconfig files:"
+            find . -name "*defconfig" -type f
+          fi
+          echo ""
+          
+          if [ -f "$DAE_CONFIG" ]; then
+            echo "✓ dae config found"
+            echo "  Size: $(wc -l < "$DAE_CONFIG") lines"
+            echo "  Contents:"
+            cat "$DAE_CONFIG"
+          else
+            echo "✗ dae config NOT found"
+          fi
+          echo ""
+      
+      # ========================================
+      # BUILD with extensive logging
+      # ========================================
+      - name: Build ISO with diagnostic logging
+        id: build
+        run: |
+          cd vyos-build
+          
+          echo "============================================"
+          echo "  Starting Diagnostic Build"
+          echo "============================================"
+          echo ""
+          
+          docker run --rm --privileged \
+            -v $(pwd):/vyos \
+            -v $(pwd)/../vyos-dae-kernel:/vyos-dae-kernel \
+            -w /vyos \
+            -e GOSU_UID=$(id -u) \
+            -e GOSU_GID=$(id -g) \
+            ${{ env.DOCKER_IMAGE }} \
+            bash -c '
+              set -e
+              set -x  # Enable command tracing
+              
+              echo "============================================"
+              echo "  DIAGNOSTIC: Inside Docker Container"
+              echo "============================================"
+              echo ""
+              
+              echo "Current directory:"
+              pwd
+              ls -la
+              echo ""
+              
+              echo "Looking for kernel config:"
+              find . -name "vyos_defconfig" -type f 2>/dev/null || echo "Not found in current dir"
+              echo ""
+              
+              echo "Looking for dae config:"
+              ls -la /vyos-dae-kernel/configs/ 2>/dev/null || echo "Directory not found"
+              echo ""
+              
+              # Try multiple possible paths
+              POSSIBLE_PATHS=(
+                "scripts/package-build/linux-kernel/arch/x86/configs/vyos_defconfig"
+                "packages/linux-kernel/arch/x86/configs/vyos_defconfig"
+                "data/defaults/vyos_defconfig"
+              )
+              
+              KERNEL_CONFIG=""
+              for path in "${POSSIBLE_PATHS[@]}"; do
+                echo "Trying path: $path"
+                if [ -f "$path" ]; then
+                  KERNEL_CONFIG="$path"
+                  echo "✓ Found at: $path"
+                  break
+                else
+                  echo "✗ Not found at: $path"
+                fi
+              done
+              echo ""
+              
+              if [ -z "$KERNEL_CONFIG" ]; then
+                echo "ERROR: Could not find vyos_defconfig"
+                echo ""
+                echo "Searching entire filesystem:"
+                find / -name "vyos_defconfig" -type f 2>/dev/null | head -10
+                exit 1
+              fi
+              
+              DAE_CONFIG="/vyos-dae-kernel/configs/kernel-dae.config"
+              
+              echo "============================================"
+              echo "  Applying dae Configuration"
+              echo "============================================"
+              echo ""
+              
+              echo "Kernel config: $KERNEL_CONFIG"
+              echo "dae config: $DAE_CONFIG"
+              echo ""
+              
+              if [ ! -f "$DAE_CONFIG" ]; then
+                echo "ERROR: dae config not found"
+                exit 1
+              fi
+              
+              echo "Original config size: $(wc -l < "$KERNEL_CONFIG") lines"
+              echo ""
+              
+              echo "Original config last 10 lines:"
+              tail -10 "$KERNEL_CONFIG"
+              echo ""
+              
+              # Backup
+              cp "$KERNEL_CONFIG" "${KERNEL_CONFIG}.original"
+              
+              # Inject
+              echo "" >> "$KERNEL_CONFIG"
+              echo "################################################################################" >> "$KERNEL_CONFIG"
+              echo "# dae eBPF/BTF Support - Added by build script" >> "$KERNEL_CONFIG"
+              echo "################################################################################" >> "$KERNEL_CONFIG"
+              cat "$DAE_CONFIG" >> "$KERNEL_CONFIG"
+              
+              echo "Modified config size: $(wc -l < "$KERNEL_CONFIG") lines"
+              echo ""
+              
+              echo "Modified config last 20 lines:"
+              tail -20 "$KERNEL_CONFIG"
+              echo ""
+              
+              # Verify each config
+              echo "Verifying critical configurations..."
+              REQUIRED_CONFIGS=(
+                "CONFIG_DEBUG_INFO_BTF=y"
+                "CONFIG_KPROBES=y"
+                "CONFIG_BPF_EVENTS=y"
+                "CONFIG_KPROBE_EVENTS=y"
+                "CONFIG_BPF=y"
+                "CONFIG_BPF_SYSCALL=y"
+                "CONFIG_BPF_JIT=y"
+              )
+              
+              ALL_FOUND=true
+              for config in "${REQUIRED_CONFIGS[@]}"; do
+                if grep -q "^${config}$" "$KERNEL_CONFIG"; then
+                  echo "  ✓ $config"
+                else
+                  echo "  ✗ $config - NOT FOUND IN FILE"
+                  ALL_FOUND=false
+                fi
+              done
+              echo ""
+              
+              if [ "$ALL_FOUND" = false ]; then
+                echo "ERROR: Some configs not found in modified file"
+                echo ""
+                echo "Showing entire modified config:"
+                cat "$KERNEL_CONFIG"
+                exit 1
+              fi
+              
+              echo "✓ Configuration injection verified"
+              echo ""
+              
+              echo "Starting build..."
+              sudo make clean
+              sudo ./build-vyos-image \
+                --architecture amd64 \
+                --build-by "'"${{ env.BUILD_BY }}"'" \
+                --build-type release \
+                --version "'"${{ steps.setup.outputs.version_tag }}"'" \
+                generic
+            ' 2>&1 | tee build.log
+          
+          # Find ISO
+          ISO_FILE=$(find build -name "*.iso" -type f | head -1)
+          
+          if [ -z "$ISO_FILE" ]; then
+            echo "ERROR: ISO not found"
+            echo ""
+            echo "Last 200 lines of build log:"
+            tail -200 build.log
+            exit 1
+          fi
+          
+          ISO_NAME=$(basename "$ISO_FILE")
+          ISO_SIZE=$(du -h "$ISO_FILE" | cut -f1)
+          
+          echo "iso_file=${ISO_FILE}" >> $GITHUB_OUTPUT
+          echo "iso_name=${ISO_NAME}" >> $GITHUB_OUTPUT
+          echo "iso_size=${ISO_SIZE}" >> $GITHUB_OUTPUT
+          
+          echo "Build completed: ${ISO_NAME} (${ISO_SIZE})"
+      
+      - name: Upload full build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-build-log
+          path: vyos-build/build.log
+          retention-days: 7
+      
+      # ========================================
+      # Verify ISO
+      # ========================================
+      - name: Install verification tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y squashfs-tools jq
+      
+      - name: Verify ISO kernel configuration
+        id: verify
+        continue-on-error: true
+        run: |
+          cd vyos-build
+          
+          cp ../vyos-dae-kernel/scripts/verify-iso-kernel.sh .
+          chmod +x verify-iso-kernel.sh
+          
+          echo "Running verification..."
+          ./verify-iso-kernel.sh "${{ steps.build.outputs.iso_file }}" | tee verification.log
+          
+          if [ -f /tmp/verification-report.json ]; then
+            cp /tmp/verification-report.json build/
+            
+            VERIFICATION_STATUS=$(jq -r '.overall_status' /tmp/verification-report.json)
+            
+            echo "verification_status=${VERIFICATION_STATUS}" >> $GITHUB_OUTPUT
+            
+            if [ "$VERIFICATION_STATUS" = "PASS" ]; then
+              echo "::notice::✓ Verification PASSED"
+            else
+              echo "::error::✗ Verification FAILED"
+            fi
+          fi
+      
+      - name: Upload verification report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: diagnostic-verification-report
+          path: |
+            vyos-build/verification.log
+            vyos-build/build/verification-report.json
+          retention-days: 7
+      
+      # ========================================
+      # Additional diagnostics
+      # ========================================
+      - name: Extract and analyze kernel config from ISO
+        if: always()
+        run: |
+          cd vyos-build
+          
+          echo "============================================"
+          echo "  Extracting Kernel Config from ISO"
+          echo "============================================"
+          echo ""
+          
+          # Mount ISO
+          sudo mkdir -p /tmp/iso-mount
+          sudo mount -o loop "${{ steps.build.outputs.iso_file }}" /tmp/iso-mount
+          
+          # Mount squashfs
+          SQUASH_FILE="/tmp/iso-mount/live/filesystem.squashfs"
+          sudo mkdir -p /tmp/squash-mount
+          sudo mount -o loop "$SQUASH_FILE" /tmp/squash-mount
+          
+          # Find kernel config
+          KERNEL_CONFIG=$(sudo find /tmp/squash-mount/boot -name "config-*" | head -1)
+          
+          if [ -n "$KERNEL_CONFIG" ]; then
+            echo "Found kernel config: $KERNEL_CONFIG"
+            echo ""
+            
+            echo "Checking for dae configs..."
+            sudo grep -E "CONFIG_(DEBUG_INFO_BTF|KPROBES|BPF_EVENTS|KPROBE_EVENTS|BPF|BPF_SYSCALL|BPF_JIT)" "$KERNEL_CONFIG" || echo "None found"
+            echo ""
+            
+            echo "Last 50 lines of kernel config:"
+            sudo tail -50 "$KERNEL_CONFIG"
+            echo ""
+            
+            echo "Searching for our header:"
+            sudo grep -n "dae eBPF/BTF Support" "$KERNEL_CONFIG" || echo "Header not found"
+          fi
+          
+          # Cleanup
+          sudo umount /tmp/squash-mount
+          sudo umount /tmp/iso-mount
+      
+      - name: Summary
+        if: always()
+        run: |
+          echo "============================================"
+          echo "  Diagnostic Build Summary"
+          echo "============================================"
+          echo ""
+          echo "Build Status: ${{ steps.build.outcome }}"
+          echo "Verification Status: ${{ steps.verify.outputs.verification_status || 'N/A' }}"
+          echo ""
+          echo "Please check the uploaded artifacts:"
+          echo "- diagnostic-build-log: Full build log with diagnostic output"
+          echo "- diagnostic-verification-report: Verification results"
+          echo ""
+          echo "Look for:"
+          echo "1. 'Applying dae Configuration' section"
+          echo "2. 'Verifying critical configurations' results"
+          echo "3. Extracted kernel config analysis"
