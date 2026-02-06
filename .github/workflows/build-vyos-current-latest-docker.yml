@@ -1,7 +1,7 @@
 # ============================================================================
 # VyOS with eBPF Kernel from current:latest - Docker Build
 # ============================================================================
-# Repository: github.com/MaurUppi/vyos-dae-kernel
+# Repository: github.com/MaurUppi/VyOS-current-eBPF
 # Purpose: Build VyOS ISO with custom kernel supporting dae (eBPF proxy)
 #
 # Features:
@@ -53,7 +53,7 @@ jobs:
       - name: Checkout dae kernel configuration
         uses: actions/checkout@v4
         with:
-          path: vyos-dae-kernel
+          path: VyOS-current-eBPF
 
       - name: Checkout VyOS build system
         uses: actions/checkout@v4
@@ -61,6 +61,26 @@ jobs:
           repository: vyos/vyos-build
           ref: ${{ env.VYOS_BRANCH }}
           path: vyos-build
+
+
+      - name: Runner cleanup & disk baseline
+        run: |
+          set -eux
+          echo "== Disk before cleanup =="
+          df -h
+
+          # Remove large preinstalled toolchains (GitHub hosted runners often include these)
+          sudo rm -rf /usr/share/dotnet || true
+          sudo rm -rf /opt/ghc || true
+          sudo rm -rf /usr/local/lib/android || true
+          sudo rm -rf /opt/hostedtoolcache || true
+
+          # Clean apt caches
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
+
+          echo "== Disk after cleanup =="
+          df -h
 
       # ========================================
       # Setup & Version Detection
@@ -75,7 +95,7 @@ jobs:
           echo "kernel_version=${KERNEL_VERSION}" >> $GITHUB_OUTPUT
           
           # Calculate dae config hash for cache key
-          DAE_CONFIG_HASH=$(sha256sum vyos-dae-kernel/configs/kernel-dae.config | cut -c1-8)
+          DAE_CONFIG_HASH=$(sha256sum VyOS-current-eBPF/configs/kernel-dae.config | cut -c1-8)
           echo "dae_config_hash=${DAE_CONFIG_HASH}" >> $GITHUB_OUTPUT
           
           # Cache key for kernel packages
@@ -92,7 +112,7 @@ jobs:
           echo "iso_name=${ISO_NAME}" >> $GITHUB_OUTPUT
           
           # Make scripts executable
-          chmod +x vyos-dae-kernel/scripts/*.sh
+          chmod +x VyOS-current-eBPF/scripts/*.sh
           
           # Create build directory
           mkdir -p vyos-build/build vyos-build/packages
@@ -157,19 +177,26 @@ jobs:
 
       - name: Pull VyOS Docker image
         run: |
+          set -eux
           if [ -f /tmp/docker-cache/vyos-build-current.tar ]; then
             docker load -i /tmp/docker-cache/vyos-build-current.tar || true
+            # Keep only one copy: remove the tar immediately after loading
+            rm -f /tmp/docker-cache/vyos-build-current.tar || true
           fi
+
           docker pull ${{ env.DOCKER_IMAGE }}
+
           mkdir -p /tmp/docker-cache
           docker save ${{ env.DOCKER_IMAGE }} -o /tmp/docker-cache/vyos-build-current.tar
+
+          df -h
 
       # ========================================
       # Build Kernel (skip if cached)
       # ========================================
       - name: Apply dae kernel configuration
         if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
-        run: ./vyos-dae-kernel/scripts/apply-dae-kernel-config.sh
+        run: ./VyOS-current-eBPF/scripts/apply-dae-kernel-config.sh
 
       - name: Build custom kernel
         if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
@@ -181,12 +208,38 @@ jobs:
             -e GOSU_UID=$(id -u) \
             -e GOSU_GID=$(id -g) \
             ${{ env.DOCKER_IMAGE }} \
-            bash -c './build.py --packages linux-kernel 2>&1' | tee vyos-build/build/kernel-build.log
+            bash -c 'export DEB_BUILD_OPTIONS=noddebs; export DEB_BUILD_PROFILES=nodbg; ./build.py --packages linux-kernel 2>&1' | tee vyos-build/build/kernel-build.log
         timeout-minutes: 120
 
       - name: Copy kernel packages
         if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
-        run: ./vyos-dae-kernel/scripts/copy-kernel-packages.sh
+        run: ./VyOS-current-eBPF/scripts/copy-kernel-packages.sh
+
+
+      - name: Post-kernel cleanup (remove build tree & debug packages)
+        if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
+        run: |
+          set -eux
+          echo "== Disk before post-kernel cleanup =="
+          df -h
+          echo "== Largest dirs under vyos-build (before) =="
+          du -h -d2 vyos-build | sort -h | tail -n 30 || true
+
+          # Remove debug packages (ISO does not need them)
+          rm -f vyos-build/packages/*-dbg_*.deb || true
+          rm -f vyos-build/packages/*-dbgsym_*.deb || true
+
+          # Remove kernel build working tree & intermediate artifacts
+          sudo rm -rf vyos-build/scripts/package-build/linux-kernel/linux-* || true
+          sudo rm -rf vyos-build/scripts/package-build/linux-kernel/debian || true
+          sudo rm -f  vyos-build/scripts/package-build/linux-kernel/*.tar.gz || true
+          sudo rm -f  vyos-build/scripts/package-build/linux-kernel/*.buildinfo || true
+          sudo rm -f  vyos-build/scripts/package-build/linux-kernel/*.changes || true
+
+          echo "== Disk after post-kernel cleanup =="
+          df -h
+          echo "== Kernel packages kept =="
+          ls -lh vyos-build/packages/*.deb || true
 
       # ========================================
       # Upload Kernel Cache
@@ -194,12 +247,13 @@ jobs:
       - name: Upload kernel cache to release
         if: ${{ steps.cache.outputs.cache_hit != 'true' || github.event.inputs.force_kernel_rebuild == 'true' }}
         run: |
+          set -eux
           RELEASE_TAG="kernel-cache-${{ steps.setup.outputs.kernel_version }}"
           CACHE_KEY="${{ steps.setup.outputs.kernel_cache_key }}"
           
           # Delete existing cache release if exists
-          gh release delete "${RELEASE_TAG}" --yes 2>/dev/null || true
-          git push origin --delete "${RELEASE_TAG}" 2>/dev/null || true
+          #gh release delete "${RELEASE_TAG}" --yes 2>/dev/null || true
+          #gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/tags/${RELEASE_TAG}" 2>/dev/null || true
           
           # Create new cache release
           gh release create "${RELEASE_TAG}" \
@@ -275,7 +329,7 @@ jobs:
         id: verify
         if: ${{ github.event.inputs.dry_run != 'true' && steps.iso.outputs.iso_file != '' }}
         run: |
-          ./vyos-dae-kernel/scripts/verify-iso-kernel.sh "${{ steps.iso.outputs.iso_file }}" | tee vyos-build/build/verification.log
+          ./VyOS-current-eBPF/scripts/verify-iso-kernel.sh "${{ steps.iso.outputs.iso_file }}" | tee vyos-build/build/verification.log
           if [ -f /tmp/verification-report.json ]; then
             cp /tmp/verification-report.json vyos-build/build/
             echo "status=$(jq -r '.overall_status' /tmp/verification-report.json)" >> $GITHUB_OUTPUT
