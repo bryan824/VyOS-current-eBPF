@@ -1,7 +1,7 @@
 # ============================================================================
 # VyOS with eBPF Kernel from current:latest - Docker Build
 # ============================================================================
-# Repository: github.com/MaurUppi/VyOS-current-eBPF
+# Repository: github.com/Bryan/VyOS-current-eBPF
 # Purpose: Build VyOS ISO with custom kernel supporting dae (eBPF proxy)
 #
 # Features:
@@ -37,7 +37,7 @@ concurrency:
 
 env:
   VYOS_BRANCH: current
-  BUILD_BY: "github-actions@MaurUppi"
+  BUILD_BY: "github-actions@Bryan"
   DOCKER_IMAGE: "vyos/vyos-build:current"
 
 jobs:

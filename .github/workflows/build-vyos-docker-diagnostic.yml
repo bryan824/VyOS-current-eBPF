@@ -14,7 +14,7 @@ permissions:
 
 env:
   VYOS_BRANCH: current
-  BUILD_BY: github-actions@MaurUppi
+  BUILD_BY: github-actions@Bryan
   DOCKER_IMAGE: vyos/vyos-build:current
 
 jobs:

@@ -290,7 +290,7 @@ print_summary() {
         echo ""
         echo "Solution:"
         echo "  - Use the pre-built ISO from:"
-        echo "    https://github.com/MaurUppi/vyos-eBPF-kernel/releases/latest"
+        echo "    https://github.com/Bryan/vyos-eBPF-kernel/releases/latest"
         echo ""
         return 1
     fi
