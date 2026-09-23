@@ -13,9 +13,9 @@ permissions:
   contents: write
 
 env:
-  VYOS_BRANCH: current
+  VYOS_BRANCH: rolling
   BUILD_BY: github-actions@Bryan
-  DOCKER_IMAGE: vyos/vyos-build:current
+  DOCKER_IMAGE: vyos/vyos-build:rolling
 
 jobs:
   build:
